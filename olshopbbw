@@ -1,0 +1,185 @@
+/************************************************************
+ * TELEGRAM → GOOGLE SHEETS AUTO INPUT BOT (v3.1)
+ * Fitur: Edit caption update otomatis + command hapus (tampil username)
+ * By @vanellope (2025)
+ ************************************************************/
+
+// === KONFIGURASI BOT DAN SPREADSHEET ===
+const BOT_TOKEN = '8390705421:AAF20B9RIzq7dX4Dx0DZLkoKezGwwobSR3Y';
+const SPREADSHEET_ID = '18dfwsqC0rGTPLDhOTjSXYt1oaoIG5MaqXQ6EoaQox0U';
+const SHEET_NAME = 'INPUT BOT';
+const TARGET_GROUP_ID = -1003199790541;
+const ADMIN_IDS = [6647639502]; // Tambahkan ID admin Telegram di sini (bisa lebih dari satu)
+
+// === WEBHOOK TEST ===
+function doGet() {
+  return HtmlService.createHtmlOutput("🤖 Bot Telegram aktif dan siap menerima data.");
+}
+
+// === HANDLER UTAMA ===
+function doPost(e) {
+  try {
+    const update = JSON.parse(e.postData.contents);
+
+    if (update.message) handleNewMessage(update.message);
+    if (update.edited_message) handleEditedCaption(update.edited_message);
+
+  } catch (err) {
+    console.error("Error:", err);
+  }
+}
+
+// === PROSES PESAN BARU ===
+function handleNewMessage(msg) {
+  const chatId = msg.chat.id;
+
+  if (chatId !== TARGET_GROUP_ID) return;
+
+  // === Command /hapus ===
+  if (msg.text && msg.text.startsWith("/hapus")) {
+    handleDeleteCommand(msg);
+    return;
+  }
+
+  // === Pastikan foto + caption ===
+  if (!msg.photo || !msg.caption) {
+    kirimPesan(chatId,
+      "⚠️ Kirim *gambar + caption* dengan format:\n\n`Keterangan / Kode / Note`\n\nContoh:\n`vanellope/T00/NDP`\n`jawa889 / T01 / RDP`",
+      msg.message_id
+    );
+    return;
+  }
+
+  const caption = msg.caption.trim();
+  const parts = caption.split(/\s*\/\s*/).map(p => p.trim());
+  if (parts.length !== 3) {
+    kirimPesan(chatId,
+      "⚠️ Format salah!\nGunakan format: `Keterangan / Kode / Note`\nContoh: `vanellope / T00 / NDP`",
+      msg.message_id
+    );
+    return;
+  }
+
+  const [keterangan, kodeRaw, noteRaw] = parts;
+  const kode = kodeRaw.toUpperCase();
+  const note = noteRaw.toUpperCase();
+
+  const validKode = /^T(0[0-9]|10)$/i.test(kode);
+  const validNote = /^(RDP|NDP)$/i.test(note);
+
+  if (!validKode || !validNote) {
+    kirimPesan(chatId,
+      "⚠️ Format salah!\nPastikan:\n- Kode = T00 s/d T10\n- Note = RDP atau NDP",
+      msg.message_id
+    );
+    return;
+  }
+
+  // === Simpan Data ===
+  const waktu = formatTanggalBaru();
+  const kodeFormatted = `T ${kode.substring(1)}`;
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  sheet.appendRow([waktu, kodeFormatted, keterangan, note, msg.message_id]);
+
+  const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
+  const reply = `${username} Noted! ✅\n\n👤 *Kode Tele :* ${kodeFormatted}\n🔥 *Username :* ${keterangan}\n🗒️ *Keterangan :* ${note}`;
+  kirimPesan(chatId, reply, msg.message_id);
+}
+
+// === HANDLE EDIT CAPTION ===
+function handleEditedCaption(edited) {
+  const chatId = edited.chat.id;
+  if (chatId !== TARGET_GROUP_ID) return;
+  if (!edited.caption) return;
+
+  const caption = edited.caption.trim();
+  const parts = caption.split(/\s*\/\s*/).map(p => p.trim());
+  if (parts.length !== 3) return;
+
+  const [keterangan, kodeRaw, noteRaw] = parts;
+  const kode = kodeRaw.toUpperCase();
+  const note = noteRaw.toUpperCase();
+  const validKode = /^T(0[0-9]|10)$/i.test(kode);
+  const validNote = /^(RDP|NDP)$/i.test(note);
+  if (!validKode || !validNote) return;
+
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  const data = sheet.getDataRange().getValues();
+  const msgId = edited.message_id;
+  const waktu = formatTanggalBaru();
+  const kodeFormatted = `T ${kode.substring(1)}`;
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][4] === msgId) {
+      sheet.getRange(i + 1, 1, 1, 4).setValues([[waktu, kodeFormatted, keterangan, note]]);
+      const username = edited.from.username ? `@${edited.from.username}` : edited.from.first_name;
+      kirimPesan(chatId, `✏️ ${username} mengedit caption.\nData di Spreadsheet sudah diperbarui ✅`, edited.message_id);
+      break;
+    }
+  }
+}
+
+// === HANDLE /HAPUS UNTUK ADMIN ===
+function handleDeleteCommand(msg) {
+  const chatId = msg.chat.id;
+  const fromId = msg.from.id;
+  const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
+
+  if (!ADMIN_IDS.includes(fromId)) {
+    kirimPesan(chatId, "🚫 Hanya admin yang dapat menggunakan perintah ini.");
+    return;
+  }
+
+  const parts = msg.text.split(" ");
+  if (parts.length !== 2 || isNaN(parts[1])) {
+    kirimPesan(chatId, "⚠️ Gunakan format: `/hapus <message_id>`", msg.message_id);
+    return;
+  }
+
+  const msgId = parseInt(parts[1]);
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  const data = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][4] === msgId) {
+      sheet.deleteRow(i + 1);
+      kirimPesan(chatId, `🗑️ ${username} menghapus 1 data dari Spreadsheet ✅`);
+      return;
+    }
+  }
+
+  kirimPesan(chatId, `❌ Data dengan Message ID ${msgId} tidak ditemukan.`);
+}
+
+// === FORMAT TANGGAL ===
+function formatTanggalBaru() {
+  const bulan = [
+    "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+    "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+  ];
+  const now = new Date();
+  const hari = Utilities.formatDate(now, "Asia/Jakarta", "dd");
+  const jamMenit = Utilities.formatDate(now, "Asia/Jakarta", "HH:mm");
+  const namaBulan = bulan[now.getMonth()];
+  return `${hari} ${namaBulan}, ${jamMenit}`;
+}
+
+// === KIRIM PESAN TELEGRAM ===
+function kirimPesan(chat_id, text, reply_to_message_id = null) {
+  const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
+  const payload = {
+    chat_id: chat_id,
+    text: text,
+    parse_mode: "Markdown",
+    reply_to_message_id: reply_to_message_id
+  };
+  const params = {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload)
+  };
+  UrlFetchApp.fetch(url, params);
+}
