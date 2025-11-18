@@ -1,0 +1,160 @@
+// ==========================
+// CONFIG BOT
+// ==========================
+const TOKEN = '8547311739:AAFaLuuTwaIn0rfl8khbk-zXg90LHntl3gE';
+const GROUP_A_ID = -1003135864927; // Grup sumber
+const PROPS = PropertiesService.getScriptProperties();
+
+// ==========================
+// HANDLE UPDATE
+// ==========================
+function doPost(e) {
+  const data = JSON.parse(e.postData.contents);
+  if (!data.message) return;
+  const msg = data.message;
+
+  // Anti loop
+  if (msg.from && msg.from.is_bot) return;
+
+  // Command
+  if (msg.text && msg.text.startsWith("/")) {
+    handleCommand(msg);
+    return;
+  }
+
+  // Hanya dari Grup A
+  if (msg.chat.id !== GROUP_A_ID) return;
+
+  forwardToAll(msg);
+}
+
+// ==========================
+// HANDLE COMMAND
+// ==========================
+function handleCommand(msg) {
+  const chatId = msg.chat.id;
+  const text = msg.text.trim();
+  const parts = text.split(" ");
+  const command = parts[0].toLowerCase();
+
+  if (command === "/add") {
+    const targetId = parts[1];
+    const topicId = parts[2] || null;
+    if (!targetId) return sendMessage(chatId, "Usage: /add <chat_id> [topic_id]");
+
+    const groups = getGroups();
+    groups[targetId] = topicId ? Number(topicId) : null;
+    saveGroups(groups);
+    sendMessage(chatId, `✅ Grup ${targetId} berhasil ditambahkan.`);
+  }
+
+  else if (command === "/addmany") {
+    const groups = getGroups();
+    let i = 1;
+    while (i < parts.length) {
+      const targetId = parts[i];
+      let topicId = null;
+      // Cek jika ada next angka → dianggap topic_id
+      if (i + 1 < parts.length && !parts[i + 1].startsWith("-")) {
+        topicId = Number(parts[i + 1]);
+        i++; // lompat ke next
+      }
+      groups[targetId] = topicId;
+      i++;
+    }
+    saveGroups(groups);
+    sendMessage(chatId, `✅ ${parts.length-1} grup berhasil ditambahkan.`);
+  }
+
+  else if (command === "/remove") {
+    const targetId = parts[1];
+    if (!targetId) return sendMessage(chatId, "Usage: /remove <chat_id>");
+    const groups = getGroups();
+    if (groups[targetId]) {
+      delete groups[targetId];
+      saveGroups(groups);
+      sendMessage(chatId, `✅ Grup ${targetId} berhasil dihapus.`);
+    } else {
+      sendMessage(chatId, `❌ Grup ${targetId} tidak ditemukan.`);
+    }
+  }
+
+  else if (command === "/list") {
+    const groups = getGroups();
+    if (Object.keys(groups).length === 0) sendMessage(chatId, "❌ Tidak ada grup tujuan.");
+    else {
+      let msgList = "📌 Grup tujuan:\n";
+      for (const g in groups) {
+        msgList += `${g} ${groups[g] ? "(topic: " + groups[g] + ")" : ""}\n`;
+      }
+      sendMessage(chatId, msgList);
+    }
+  }
+
+  else if (command === "/deleteall") {
+    PROPS.deleteProperty("targets");
+    sendMessage(chatId, "✅ Semua grup tujuan telah dihapus.");
+  }
+
+  else if (command === "/help") {
+    const helpMsg = `
+📌 Daftar Command Bot:
+
+/add <chat_id> [topic_id] → Tambah grup tujuan
+/addmany <chat_id> [topic_id] → Tambah banyak grup sekaligus
+/remove <chat_id> → Hapus grup tujuan
+/list → Tampilkan semua grup tujuan
+/deleteall → Hapus semua grup tujuan
+/help → Tampilkan daftar command
+    `;
+    sendMessage(chatId, helpMsg);
+  }
+}
+
+// ==========================
+// FORWARD TO ALL TARGETS
+// ==========================
+function forwardToAll(msg) {
+  const groups = getGroups();
+  let count = 0;
+  for (const g in groups) {
+    const payload = {
+      chat_id: g,
+      from_chat_id: msg.chat.id,
+      message_id: msg.message_id
+    };
+    if (groups[g]) payload.message_thread_id = groups[g];
+    try {
+      UrlFetchApp.fetch(`https://api.telegram.org/bot${TOKEN}/forwardMessage`, {
+        method: "post",
+        contentType: "application/json",
+        payload: JSON.stringify(payload)
+      });
+      count++;
+    } catch (err) { Logger.log(`Gagal forward ke ${g}: ${err}`); }
+  }
+  sendMessage(msg.chat.id, `✅ Pesan sudah di-forward ke ${count} grup.`);
+}
+
+// ==========================
+// GET / SAVE GROUPS
+// ==========================
+function getGroups() {
+  const raw = PROPS.getProperty("targets");
+  return raw ? JSON.parse(raw) : {};
+}
+function saveGroups(groups) {
+  PROPS.setProperty("targets", JSON.stringify(groups));
+}
+
+// ==========================
+// SEND MESSAGE
+// ==========================
+function sendMessage(chatId, text) {
+  const payload = { chat_id: chatId, text: text };
+  UrlFetchApp.fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload)
+  });
+}
